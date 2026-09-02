@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dont-forget"
+version = "0.1.0"
+description = "A local REMEMBER → CHECK → ACT MVP"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "pydantic>=2.8,<3",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<9",
+]
+
+[project.scripts]
+dont-forget = "dont_forget.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
