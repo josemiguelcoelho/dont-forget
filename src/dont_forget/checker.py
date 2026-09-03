@@ -31,6 +31,12 @@ class IntentionChecker:
                 notices.append(notice)
         return notices
 
+    def check_now(self, intention_id: str) -> str | None:
+        intention = self.store.get_intention(intention_id)
+        if intention is None:
+            raise ValueError(f"Unknown intention: {intention_id}")
+        return self._check(intention, self.clock())
+
     def _check(self, intention: Intention, now: datetime) -> str | None:
         source_url = next(source.value for source in intention.sources if source.kind == "url")
         repository_path = next(
@@ -46,6 +52,9 @@ class IntentionChecker:
         most_important = max(missing_requirements, key=lambda item: item[1], default=None)
         intention.most_important_unresolved_requirement = (
             most_important[0] if most_important else None
+        )
+        intention.requirement_capability = self._classify_requirement(
+            intention.most_important_unresolved_requirement
         )
 
         self.store.append_event(
@@ -63,39 +72,20 @@ class IntentionChecker:
         )
 
         notice: str | None = None
-        if assessment.deadline_near and not repository.has_demo:
-            checklist, created = self.actions.create_demo_checklist(repository.repository)
-            if created:
-                self.store.append_event(
-                    intention.id,
-                    "action_completed",
-                    {"action": "create_demo_checklist", "path": str(checklist)},
-                    now,
-                )
-                notice = (
-                    "one thing. the deadline is tomorrow and the demo is still missing. "
-                    "i made you a checklist."
-                )
+        if missing_requirements:
+            descriptions = ", ".join(item[0] for item in missing_requirements)
             intention.current_state = (
-                "Repository is public; demo video is missing; checklist created."
-                if repository.is_public
-                else "Repository and demo video are missing; checklist created."
+                f"Unresolved requirements: {descriptions}. Most important: "
+                f"{intention.most_important_unresolved_requirement}."
             )
-            if intention.next_action:
-                intention.next_action.status = "completed"
         else:
-            if missing_requirements:
-                descriptions = ", ".join(item[0] for item in missing_requirements)
-                intention.current_state = (
-                    f"Unresolved requirements: {descriptions}. Most important: "
-                    f"{intention.most_important_unresolved_requirement}."
-                )
-            else:
-                intention.current_state = "All known requirements are satisfied."
-            if intention.next_action and intention.next_action.action_type == "inspect_repository":
-                intention.next_action.status = "completed"
+            intention.current_state = "All known requirements are satisfied."
 
-        if not repository.has_useful_setup and repository.setup_commands:
+        if (
+            intention.requirement_capability == "agent_can_handle"
+            and not repository.has_useful_setup
+            and repository.setup_commands
+        ):
             intention.next_action = NextAction(
                 description="Add setup instructions to README.md",
                 mode="agent",
@@ -106,6 +96,8 @@ class IntentionChecker:
                 },
             )
             intention.current_state += " README setup instructions are missing; repair awaits approval."
+        else:
+            intention.next_action = None
 
         if missing_requirements:
             intention.status = "active"
@@ -144,7 +136,7 @@ class IntentionChecker:
             elif "readme" in normalized or "setup instruction" in normalized:
                 satisfied = repository.has_useful_setup
                 claim = f"README setup instructions are {'present' if satisfied else 'missing'}"
-                importance = 70
+                importance = 85
             else:
                 satisfied = False
                 claim = "No local evidence satisfies this requirement"
@@ -160,6 +152,15 @@ class IntentionChecker:
             if not satisfied:
                 missing.append((requirement.description, importance))
         return missing
+
+    @staticmethod
+    def _classify_requirement(description: str | None) -> str | None:
+        if description is None:
+            return None
+        normalized = description.casefold()
+        if "readme" in normalized or "setup instruction" in normalized:
+            return "agent_can_handle"
+        return "user_must_handle"
 
     @staticmethod
     def _missing_notice(description: str) -> str:

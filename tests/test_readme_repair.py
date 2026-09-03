@@ -29,9 +29,10 @@ def build_flow(tmp_path: Path, repository: Path) -> tuple[
     source_page = tmp_path / "hackathon.txt"
     source_page.write_text(
         "Hackathon: Tiny Agents\n"
-        "Deadline: 2026-09-03T11:00:00+00:00\n"
+        "Deadline: 2026-09-05T11:00:00+00:00\n"
         "Requirements:\n"
         "- Public repository\n"
+        "- README setup\n"
         "- Demo video\n",
         encoding="utf-8",
     )
@@ -50,8 +51,8 @@ def build_flow(tmp_path: Path, repository: Path) -> tuple[
     store = SQLiteStore(tmp_path / "dont-forget.db")
     actions = LocalActions([repository])
     interpreter = DeterministicInterpreter()
-    agent = DontForgetAgent(store, interpreter, actions, clock)
     checker = IntentionChecker(store, interpreter, actions, clock)
+    agent = DontForgetAgent(store, interpreter, actions, clock, checker)
     agent.receive(
         f"don't let me forget this hackathon: {source_page.as_uri()}. "
         f"my project is in {repository}"
@@ -76,18 +77,18 @@ def test_approval_repairs_existing_readme_once(tmp_path: Path) -> None:
     assert pending.next_action.status == "proposed"
 
     assert agent.receive("handle what you can") == (
-        "Added README setup instructions. You still need to record the demo."
+        "done. README setup is fixed. you still need to record the demo."
     )
     repaired = readme.read_text(encoding="utf-8")
     assert repaired.startswith(original)
     assert repaired.count("## Setup") == 1
     assert "uv sync --extra test" in repaired
     assert "uv run pytest" in repaired
-    assert store.count_events(pending.id, "action_completed") == 2
+    assert store.count_events(pending.id, "action_completed") == 1
 
-    assert agent.receive("handle what you can") == "Nothing else I can handle."
+    assert agent.receive("handle what you can") == "you still need to record the demo."
     assert readme.read_text(encoding="utf-8") == repaired
-    assert store.count_events(pending.id, "action_completed") == 2
+    assert store.count_events(pending.id, "action_completed") == 1
 
 
 def test_approval_creates_missing_readme_with_derived_setup(tmp_path: Path) -> None:
@@ -100,7 +101,7 @@ def test_approval_creates_missing_readme_with_derived_setup(tmp_path: Path) -> N
 
     assert not readme.exists()
     assert agent.receive("please handle what you can") == (
-        "Added README setup instructions. You still need to record the demo."
+        "done. README setup is fixed. you still need to record the demo."
     )
     assert readme.read_text(encoding="utf-8") == (
         "# Tiny Agents\n\n"
@@ -124,7 +125,7 @@ def test_approval_completes_partial_setup_without_duplicate_commands(tmp_path: P
     clock.advance(hours=1)
     checker.run_due()
     assert agent.receive("handle what you can") == (
-        "Added README setup instructions. You still need to record the demo."
+        "done. README setup is fixed. you still need to record the demo."
     )
 
     repaired = readme.read_text(encoding="utf-8")
@@ -155,3 +156,4 @@ def test_approval_rejects_pending_repair_outside_workspace(tmp_path: Path) -> No
         agent.receive("handle what you can")
 
     assert not (outside / "README.md").exists()
+    assert store.count_events(pending.id, "action_completed") == 0

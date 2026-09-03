@@ -26,8 +26,8 @@ def main() -> None:
     store = SQLiteStore(args.db)
     actions = LocalActions([args.workspace])
     interpreter = DeterministicInterpreter()
-    agent = DontForgetAgent(store, interpreter, actions, utc_now)
     checker = IntentionChecker(store, interpreter, actions, utc_now)
+    agent = DontForgetAgent(store, interpreter, actions, utc_now, checker)
     stopped = threading.Event()
 
     def check_loop() -> None:

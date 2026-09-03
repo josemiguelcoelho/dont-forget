@@ -41,8 +41,8 @@ def test_local_remember_check_act_flow_is_persistent_and_idempotent(tmp_path: Pa
     store = SQLiteStore(tmp_path / "dont-forget.db")
     actions = LocalActions(allowed_workspaces=[repository])
     interpreter = DeterministicInterpreter()
-    agent = DontForgetAgent(store, interpreter, actions, clock)
     checker = IntentionChecker(store, interpreter, actions, clock)
+    agent = DontForgetAgent(store, interpreter, actions, clock, checker)
 
     reply = agent.receive(
         f"don't let me forget this hackathon: {source_page.as_uri()}. "
@@ -81,26 +81,21 @@ def test_local_remember_check_act_flow_is_persistent_and_idempotent(tmp_path: Pa
     clock.advance(hours=1)
     notices = checker.run_due()
 
-    assert notices == [
-        "one thing. the deadline is tomorrow and the demo is still missing. i made you a checklist."
-    ]
+    assert notices == ["one thing. your demo is still missing."]
     assert len(notices[0]) < 120
 
     checklist = repository / "DEMO_CHECKLIST.md"
-    assert checklist.exists()
-    assert "Record the demo video" in checklist.read_text(encoding="utf-8")
+    assert not checklist.exists()
 
     updated = store.get_intention(intention.id)
     assert updated is not None
-    assert updated.current_state == "Repository is public; demo video is missing; checklist created."
+    assert updated.current_state == "Unresolved requirements: Demo video. Most important: Demo video."
     demo = next(req for req in updated.requirements if req.description == "Demo video")
     assert demo.status == "missing"
     assert any(item.source == str(repository) for item in demo.evidence)
     assert store.count_events(intention.id, "checked") == 1
-    assert store.count_events(intention.id, "action_completed") == 1
+    assert store.count_events(intention.id, "action_completed") == 0
 
-    first_contents = checklist.read_text(encoding="utf-8")
     assert checker.run_due() == []
-    assert checklist.read_text(encoding="utf-8") == first_contents
     assert store.count_events(intention.id, "checked") == 1
-    assert store.count_events(intention.id, "action_completed") == 1
+    assert store.count_events(intention.id, "action_completed") == 0

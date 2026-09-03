@@ -48,8 +48,8 @@ def build_flow(
     store = SQLiteStore(tmp_path / "dont-forget.db")
     actions = LocalActions([repository])
     interpreter = DeterministicInterpreter()
-    agent = DontForgetAgent(store, interpreter, actions, clock)
     checker = IntentionChecker(store, interpreter, actions, clock)
+    agent = DontForgetAgent(store, interpreter, actions, clock, checker)
     agent.receive(
         f"don't let me forget this hackathon: {source_page.as_uri()}. "
         f"my project is in {repository}"
@@ -110,10 +110,7 @@ def test_check_prioritizes_demo_as_the_deadline_gets_close(tmp_path: Path) -> No
         tmp_path, deadline=deadline, public=False, demo=False
     )
 
-    assert checker.run_due() == [
-        "one thing. the deadline is tomorrow and the demo is still missing. "
-        "i made you a checklist."
-    ]
+    assert checker.run_due() == ["one thing. your demo is still missing."]
     intention = store.list_intentions()[0]
     assert intention.most_important_unresolved_requirement == "Demo video"
 

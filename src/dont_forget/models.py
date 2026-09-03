@@ -43,6 +43,7 @@ class Intention(BaseModel):
     requirements: list[Requirement]
     current_state: str
     most_important_unresolved_requirement: str | None = None
+    requirement_capability: Literal["agent_can_handle", "user_must_handle"] | None = None
     next_action: NextAction | None
     next_check_at: datetime | None
     confidence: float = Field(ge=0, le=1)

@@ -115,6 +115,20 @@ class SQLiteStore:
             ).fetchone()
         return int(row["count"])
 
+    def list_event_payloads(
+        self, intention_id: str, event_type: str
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT payload FROM intention_events
+                WHERE intention_id = ? AND type = ?
+                ORDER BY sequence
+                """,
+                (intention_id, event_type),
+            ).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
     def close(self) -> None:
         with self._lock:
             self._connection.close()
