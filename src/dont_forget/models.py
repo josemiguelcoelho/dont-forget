@@ -60,6 +60,9 @@ class RepositoryEvidence(BaseModel):
     repository: str
     is_public: bool
     has_demo: bool
+    has_readme: bool
+    has_useful_setup: bool
+    setup_commands: list[str] = Field(default_factory=list)
 
 
 class CheckAssessment(BaseModel):

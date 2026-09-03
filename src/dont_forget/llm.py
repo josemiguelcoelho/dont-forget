@@ -19,6 +19,8 @@ from .models import (
 
 
 class Interpreter(Protocol):
+    def is_action_approval(self, message: str) -> bool: ...
+
     def parse_message(self, message: str) -> MessageContext: ...
 
     def remember(
@@ -40,6 +42,9 @@ class Interpreter(Protocol):
 
 class DeterministicInterpreter:
     """Fixture-friendly stand-in for a future structured-output LLM."""
+
+    def is_action_approval(self, message: str) -> bool:
+        return bool(re.search(r"\bhandle what you can\b", message, flags=re.IGNORECASE))
 
     def parse_message(self, message: str) -> MessageContext:
         match = re.search(

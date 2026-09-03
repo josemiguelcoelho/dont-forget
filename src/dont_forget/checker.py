@@ -5,7 +5,7 @@ from typing import Callable
 
 from .actions import LocalActions
 from .llm import Interpreter
-from .models import Evidence, Intention
+from .models import Evidence, Intention, NextAction
 from .store import SQLiteStore
 
 
@@ -92,6 +92,18 @@ class IntentionChecker:
                 intention.next_action.status = "completed"
         else:
             intention.current_state = "Project checked; no urgent action was needed."
+
+        if not repository.has_useful_setup and repository.setup_commands:
+            intention.next_action = NextAction(
+                description="Add setup instructions to README.md",
+                mode="agent",
+                action_type="repair_readme_setup",
+                parameters={
+                    "repository": repository.repository,
+                    "commands": repository.setup_commands,
+                },
+            )
+            intention.current_state += " README setup instructions are missing; repair awaits approval."
 
         intention.next_check_at = now + timedelta(hours=6)
         intention.updated_at = now

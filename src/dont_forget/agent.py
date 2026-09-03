@@ -23,6 +23,8 @@ class DontForgetAgent:
 
     def receive(self, message: str) -> str:
         now = self.clock()
+        if self.interpreter.is_action_approval(message):
+            return self._act(now)
         context = self.interpreter.parse_message(message)
         source_text = self.actions.read_source(context.source_url)
         intention = self.interpreter.remember(message, context, source_text, now)
@@ -34,3 +36,27 @@ class DontForgetAgent:
             now,
         )
         return "got it"
+
+    def _act(self, now: datetime) -> str:
+        changed = False
+        for intention in self.store.list_intentions():
+            action = intention.next_action
+            if not action or action.status != "proposed" or action.action_type != "repair_readme_setup":
+                continue
+            readme, repaired = self.actions.repair_readme_setup(action.parameters["repository"])
+            action.status = "completed"
+            intention.updated_at = now
+            intention.version += 1
+            if repaired:
+                changed = True
+                intention.current_state = "README setup instructions added; demo video still requires the user."
+                self.store.append_event(
+                    intention.id,
+                    "action_completed",
+                    {"action": "repair_readme_setup", "path": str(readme)},
+                    now,
+                )
+            self.store.save_intention(intention)
+        if changed:
+            return "Added README setup instructions. You still need to record the demo."
+        return "Nothing else I can handle."

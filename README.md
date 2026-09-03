@@ -10,6 +10,9 @@ A deliberately small local MVP that remembers an intention, checks it later, and
 - Rechecks due intentions against the source and a local repository.
 - Detects a near deadline and a missing demo.
 - Creates `DEMO_CHECKLIST.md` only inside an explicitly allowed workspace.
+- Detects a missing or incomplete README setup section without changing it during the check.
+- Repairs README setup instructions only after an explicit `handle what you can` approval.
+- Derives setup commands from `pyproject.toml` and `uv.lock`, preserving existing README content.
 - Reschedules the intention so the action and notification are not duplicated.
 
 `DeterministicInterpreter` is a fixture-friendly replacement point for a future structured-output LLM. The core depends on its `Interpreter` protocol, not on a messaging channel or model provider.
@@ -50,6 +53,8 @@ don't let me forget this hackathon: file:///C:/path/to/hackathon.txt. my project
 ```
 
 The immediate reply is `got it`. The process checks due intentions in the background. The deterministic MVP schedules its first check one hour later.
+
+If the check proposes a README repair, send `handle what you can`. The agent appends only missing setup instructions inside the configured workspace and reports what still needs the user.
 
 ## Scope
 
