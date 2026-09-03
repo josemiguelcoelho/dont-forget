@@ -42,6 +42,7 @@ class Intention(BaseModel):
     deadline_at: datetime
     requirements: list[Requirement]
     current_state: str
+    most_important_unresolved_requirement: str | None = None
     next_action: NextAction | None
     next_check_at: datetime | None
     confidence: float = Field(ge=0, le=1)

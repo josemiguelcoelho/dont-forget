@@ -8,6 +8,9 @@ A deliberately small local MVP that remembers an intention, checks it later, and
 - Reads a fixture source and persists a typed intention in SQLite.
 - Keeps append-only `created`, `checked`, and `action_completed` events.
 - Rechecks due intentions against the source and a local repository.
+- Classifies remembered requirements from current repository evidence.
+- Persists the most important unresolved requirement and reports only that item.
+- Prioritizes repository visibility normally and a missing demo when the deadline is near.
 - Detects a near deadline and a missing demo.
 - Creates `DEMO_CHECKLIST.md` only inside an explicitly allowed workspace.
 - Detects a missing or incomplete README setup section without changing it during the check.
