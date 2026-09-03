@@ -39,7 +39,7 @@ class Intention(BaseModel):
     original_message: str
     status: Literal["active", "blocked", "completed", "abandoned"] = "active"
     sources: list[Source]
-    deadline_at: datetime
+    deadline_at: datetime | None
     requirements: list[Requirement]
     current_state: str
     most_important_unresolved_requirement: str | None = None
@@ -55,7 +55,7 @@ class Intention(BaseModel):
 
 class MessageContext(BaseModel):
     source_url: str
-    repository: str
+    repository: str | None = None
 
 
 class RepositoryEvidence(BaseModel):

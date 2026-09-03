@@ -38,7 +38,7 @@ class DontForgetAgent:
             {"objective": intention.objective, "source": context.source_url},
             now,
         )
-        return "got it"
+        return "got you." if context.repository is None else "got it"
 
     def _act(self, now: datetime) -> str:
         for intention in self.store.list_intentions():

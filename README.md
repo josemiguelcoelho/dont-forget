@@ -4,6 +4,10 @@ A deliberately small local MVP that remembers an intention, checks it later, and
 
 ## What this milestone does
 
+- Accepts a natural message containing an HTTP(S) or `file://` source URL.
+- Preserves the source URL and original message in the stored intention.
+- Prefers an explicit action such as applying or registering; otherwise infers participation from clear event context.
+- Stores ambiguous sources as low-confidence follow-ups instead of inventing deadlines, requirements, or actions.
 - Accepts a natural-language hackathon reminder.
 - Reads a fixture source and persists a typed intention in SQLite.
 - Keeps append-only `created`, `checked`, and `action_completed` events.
@@ -20,6 +24,8 @@ A deliberately small local MVP that remembers an intention, checks it later, and
 - Keeps repeated ACT requests idempotent and revalidates workspace authorization at execution time.
 
 `DeterministicInterpreter` is a fixture-friendly replacement point for a future structured-output LLM. The core depends on its `Interpreter` protocol, not on a messaging channel or model provider.
+
+For example, `https://example.com/hackathon — don't let me forget this` receives the minimal response `got you.`. A source-only intention is persisted without a fabricated deadline or CHECK/ACT action. The existing repository-aware hackathon flow continues to schedule CHECK and use approval-gated ACT.
 
 ## Setup
 

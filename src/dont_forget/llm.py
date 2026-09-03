@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+from html import unescape
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .models import (
@@ -47,16 +49,26 @@ class DeterministicInterpreter:
         return bool(re.search(r"\bhandle what you can\b", message, flags=re.IGNORECASE))
 
     def parse_message(self, message: str) -> MessageContext:
-        match = re.search(
+        legacy_match = re.search(
             r"hackathon:\s*(?P<url>\S+?)\.\s*my project is in\s+(?P<repository>.+)$",
             message,
             flags=re.IGNORECASE,
         )
+        if legacy_match:
+            return MessageContext(
+                source_url=legacy_match.group("url"),
+                repository=str(Path(legacy_match.group("repository").strip()).resolve()),
+            )
+
+        match = re.search(r"(?:https?://|file://)\S+", message, flags=re.IGNORECASE)
         if not match:
-            raise ValueError("I need a hackathon source and project folder.")
+            raise ValueError("I need a message containing a URL.")
+        source_url = match.group(0).rstrip(".,;:!?)]}")
+        parsed = urlsplit(source_url)
+        if parsed.scheme in {"http", "https"} and not parsed.netloc:
+            raise ValueError("I need a valid source URL.")
         return MessageContext(
-            source_url=match.group("url"),
-            repository=str(Path(match.group("repository").strip()).resolve()),
+            source_url=source_url,
         )
 
     def remember(
@@ -66,6 +78,9 @@ class DeterministicInterpreter:
         source_text: str,
         now: datetime,
     ) -> Intention:
+        if context.repository is None:
+            return self._remember_source(message, context, source_text, now)
+
         name, deadline, requirements = self._parse_source(source_text)
         requirement_models = [
             Requirement(
@@ -100,6 +115,75 @@ class DeterministicInterpreter:
             ),
             next_check_at=min(now + timedelta(hours=1), deadline),
             confidence=0.95,
+            created_at=now,
+            updated_at=now,
+        )
+
+    @staticmethod
+    def _remember_source(
+        message: str,
+        context: MessageContext,
+        source_text: str,
+        now: datetime,
+    ) -> Intention:
+        title_match = re.search(
+            r"<title[^>]*>(?P<title>.*?)</title>",
+            source_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        title = None
+        if title_match:
+            title = re.sub(r"\s+", " ", unescape(title_match.group("title"))).strip()
+        explicit_match = re.search(
+            r"\b(?:don't let me forget to|remember to)\s+"
+            r"(?P<action>apply|register|attend|participate|submit|read|buy)\b",
+            message,
+            re.IGNORECASE,
+        )
+        event_context = " ".join(
+            part for part in (context.source_url, title, source_text[:1000]) if part
+        )
+        if explicit_match:
+            action = explicit_match.group("action").casefold()
+            prefixes = {
+                "apply": "Apply to",
+                "register": "Register for",
+                "attend": "Attend",
+                "participate": "Participate in",
+                "submit": "Submit to",
+                "read": "Read",
+                "buy": "Buy",
+            }
+            objective = f"{prefixes[action]} {title or 'this source'}"
+            confidence = 0.9
+            current_state = "Remembered from the user's stated intention; details are unconfirmed."
+        elif re.search(
+            r"\b(hackathon|conference|meetup|workshop)\b",
+            event_context,
+            re.IGNORECASE,
+        ):
+            objective = f"Participate in {title}" if title else "Participate in the event"
+            confidence = 0.75
+            current_state = (
+                "Inferred event participation from source context; details are unconfirmed."
+            )
+        else:
+            objective = f"Follow up on {title}" if title else "Follow up on this source"
+            confidence = 0.35
+            current_state = (
+                "Remembered with an uncertain intention; source details are unconfirmed."
+            )
+        return Intention(
+            id=str(uuid4()),
+            objective=objective,
+            original_message=message,
+            sources=[Source(kind="url", value=context.source_url, observed_at=now)],
+            deadline_at=None,
+            requirements=[],
+            current_state=current_state,
+            next_action=None,
+            next_check_at=None,
+            confidence=confidence,
             created_at=now,
             updated_at=now,
         )

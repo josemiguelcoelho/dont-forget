@@ -59,7 +59,7 @@ class SQLiteStore:
                 (
                     intention.id,
                     intention.status,
-                    intention.deadline_at.isoformat(),
+                    intention.deadline_at.isoformat() if intention.deadline_at else "",
                     intention.next_check_at.isoformat() if intention.next_check_at else None,
                     intention.updated_at.isoformat(),
                     intention.model_dump_json(),
