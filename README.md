@@ -8,6 +8,12 @@ A deliberately small local MVP that remembers an intention, checks it later, and
 - Preserves the source URL and original message in the stored intention.
 - Prefers an explicit action such as applying or registering; otherwise infers participation from clear event context.
 - Stores ambiguous sources as low-confidence follow-ups instead of inventing deadlines, requirements, or actions.
+- Boundedly fetches up to 200 KB per source with an injectable fetcher, then runs an injectable extractor.
+- Allows network fetching only for HTTP(S) destinations that resolve to public addresses, pins the connection to a validated address, rejects redirects, and limits `file://` sources to approved roots.
+- Extracts only explicit timezone-aware ISO deadlines and list items under clear requirements, eligibility, participation, or submission headings.
+- Stores the source excerpt, URL, observation time, and confidence behind verified deadlines, requirements, and title context.
+- Leaves unsupported deadlines and requirements unknown; inferred objectives remain visibly distinct from verified facts.
+- Schedules and refreshes source-only CHECKs when a verified future deadline exists, without requiring a repository.
 - Accepts a natural-language hackathon reminder.
 - Reads a fixture source and persists a typed intention in SQLite.
 - Keeps append-only `created`, `checked`, and `action_completed` events.
@@ -25,7 +31,7 @@ A deliberately small local MVP that remembers an intention, checks it later, and
 
 `DeterministicInterpreter` is a fixture-friendly replacement point for a future structured-output LLM. The core depends on its `Interpreter` protocol, not on a messaging channel or model provider.
 
-For example, `https://example.com/hackathon — don't let me forget this` receives the minimal response `got you.`. A source-only intention is persisted without a fabricated deadline or CHECK/ACT action. The existing repository-aware hackathon flow continues to schedule CHECK and use approval-gated ACT.
+For example, `https://example.com/hackathon — don't let me forget this` receives the minimal response `got you.`. A source-only intention is enriched from explicit source evidence. If no deadline is verified, it remains unscheduled; if one is verified, CHECK refreshes the source on a deadline-bounded schedule. The existing repository-aware hackathon flow continues to use approval-gated ACT.
 
 ## Setup
 
@@ -53,7 +59,7 @@ The repository is considered public when it contains `.public`. A demo is presen
 Start the local natural-language channel, limiting file actions to the project workspace:
 
 ```text
-uv run dont-forget --workspace C:/path/to/project
+uv run dont-forget --workspace C:/path/to/project --source-root C:/path/to
 ```
 
 Then send:
@@ -68,4 +74,4 @@ If the current requirement is an incomplete README setup, send `handle what you 
 
 ## Scope
 
-The source reader uses Python's URL reader so the fixture can be a `file://` URL. Local actions reject repository paths outside the configured workspace. This milestone intentionally implements only the tested REMEMBER → CHECK → ACT path.
+An approved fixture can be a `file://` URL. HTTP(S) hosts must resolve only to public addresses, the connection is pinned to a validated address while retaining the original Host and TLS identity, redirects are rejected, local files must be under configured source roots, and reads are capped at 200 KB with a five-second timeout. The deterministic extractor intentionally recognizes only explicit timezone-aware ISO 8601 deadlines and clearly headed list requirements; JavaScript-rendered pages, natural-language dates, PDFs, redirects, and semantic extraction need a future web/Hermes-backed adapter. Local actions reject repository paths outside the configured workspace. This milestone intentionally implements only the tested REMEMBER → CHECK → ACT path.

@@ -46,7 +46,7 @@ def build_flow(
         (repository / "demo.mp4").write_bytes(b"demo")
 
     store = SQLiteStore(tmp_path / "dont-forget.db")
-    actions = LocalActions([repository])
+    actions = LocalActions([repository], allowed_source_roots=[tmp_path])
     interpreter = DeterministicInterpreter()
     checker = IntentionChecker(store, interpreter, actions, clock)
     agent = DontForgetAgent(store, interpreter, actions, clock, checker)
@@ -138,3 +138,76 @@ def test_repeated_checks_preserve_requirement_state(tmp_path: Path) -> None:
     assert first_next_check is not None
     assert repeated.next_check_at > first_next_check
     assert store.count_events(repeated.id, "checked") == 2
+
+
+def test_check_blocks_instead_of_completing_after_the_deadline(tmp_path: Path) -> None:
+    deadline = datetime(2026, 9, 2, 12, 30, tzinfo=timezone.utc)
+    store, checker, _ = build_flow(
+        tmp_path, deadline=deadline, public=True, demo=True
+    )
+
+    assert checker.run_due() == ["the verified deadline has passed."]
+
+    intention = store.list_intentions()[0]
+    assert intention.status == "blocked"
+    assert intention.resolved_at is None
+    assert intention.next_check_at is None
+
+
+def test_check_blocks_when_repository_deadline_is_no_longer_verifiable(
+    tmp_path: Path,
+) -> None:
+    deadline = datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc)
+    store, checker, _ = build_flow(
+        tmp_path, deadline=deadline, public=True, demo=True
+    )
+    (tmp_path / "hackathon.txt").write_text(
+        "Hackathon: Tiny Agents\n"
+        "Requirements:\n"
+        "- Public repository\n"
+        "- Demo video\n",
+        encoding="utf-8",
+    )
+
+    assert checker.run_due() == ["the deadline can no longer be verified."]
+
+    intention = store.list_intentions()[0]
+    assert intention.status == "blocked"
+    assert intention.deadline_at is None
+    assert intention.deadline_evidence == []
+    assert intention.next_check_at is None
+    assert store.count_events(intention.id, "checked") == 1
+
+
+def test_repository_next_check_never_runs_after_verified_deadline(tmp_path: Path) -> None:
+    deadline = datetime(2026, 9, 2, 17, 0, tzinfo=timezone.utc)
+    store, checker, _ = build_flow(
+        tmp_path, deadline=deadline, public=True, demo=False
+    )
+
+    checker.run_due()
+
+    intention = store.list_intentions()[0]
+    assert intention.next_check_at == deadline
+
+
+def test_repository_check_refreshes_changed_source_requirements(tmp_path: Path) -> None:
+    deadline = datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc)
+    store, checker, _ = build_flow(
+        tmp_path, deadline=deadline, public=True, demo=False
+    )
+    (tmp_path / "hackathon.txt").write_text(
+        "Hackathon: Tiny Agents\n"
+        f"Deadline: {deadline.isoformat()}\n"
+        "Requirements:\n"
+        "- Public repository\n",
+        encoding="utf-8",
+    )
+
+    assert checker.run_due() == ["all set. your requirements are covered."]
+
+    intention = store.list_intentions()[0]
+    assert [item.description for item in intention.requirements] == ["Public repository"]
+    assert intention.requirements[0].evidence[0].observed_at == datetime(
+        2026, 9, 2, 13, 0, tzinfo=timezone.utc
+    )

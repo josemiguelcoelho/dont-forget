@@ -20,11 +20,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local Don't Forget MVP")
     parser.add_argument("--db", type=Path, default=Path(".dont-forget.db"))
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        action="append",
+        default=[],
+        help="Allow file:// sources under this root; may be repeated",
+    )
     parser.add_argument("--check-every", type=float, default=5.0, metavar="SECONDS")
     args = parser.parse_args()
 
     store = SQLiteStore(args.db)
-    actions = LocalActions([args.workspace])
+    actions = LocalActions([args.workspace], allowed_source_roots=args.source_root)
     interpreter = DeterministicInterpreter()
     checker = IntentionChecker(store, interpreter, actions, utc_now)
     agent = DontForgetAgent(store, interpreter, actions, utc_now, checker)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from html import unescape
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
@@ -10,7 +9,6 @@ from uuid import uuid4
 
 from .models import (
     CheckAssessment,
-    Evidence,
     Intention,
     MessageContext,
     NextAction,
@@ -18,6 +16,7 @@ from .models import (
     Requirement,
     Source,
 )
+from .sources import DeterministicSourceExtractor, SourceEnrichment, SourceExtractor
 
 
 class Interpreter(Protocol):
@@ -33,10 +32,14 @@ class Interpreter(Protocol):
         now: datetime,
     ) -> Intention: ...
 
+    def enrich_source(
+        self, source_url: str, source_text: str, now: datetime
+    ) -> SourceEnrichment: ...
+
     def check(
         self,
         intention: Intention,
-        source_text: str,
+        enrichment: SourceEnrichment,
         repository: RepositoryEvidence,
         now: datetime,
     ) -> CheckAssessment: ...
@@ -45,8 +48,16 @@ class Interpreter(Protocol):
 class DeterministicInterpreter:
     """Fixture-friendly stand-in for a future structured-output LLM."""
 
+    def __init__(self, source_extractor: SourceExtractor | None = None) -> None:
+        self.source_extractor = source_extractor or DeterministicSourceExtractor()
+
     def is_action_approval(self, message: str) -> bool:
         return bool(re.search(r"\bhandle what you can\b", message, flags=re.IGNORECASE))
+
+    def enrich_source(
+        self, source_url: str, source_text: str, now: datetime
+    ) -> SourceEnrichment:
+        return self.source_extractor.extract(source_url, source_text, now)
 
     def parse_message(self, message: str) -> MessageContext:
         legacy_match = re.search(
@@ -81,59 +92,69 @@ class DeterministicInterpreter:
         if context.repository is None:
             return self._remember_source(message, context, source_text, now)
 
-        name, deadline, requirements = self._parse_source(source_text)
-        requirement_models = [
-            Requirement(
-                description=requirement,
-                evidence=[
-                    Evidence(
-                        claim=f"The hackathon requires: {requirement}",
-                        source=context.source_url,
-                        observed_at=now,
-                        confidence=1.0,
-                    )
-                ],
+        enrichment = self.enrich_source(context.source_url, source_text, now)
+        if (
+            enrichment.title is None
+            or enrichment.deadline_at is None
+            or not enrichment.deadline_evidence
+            or not enrichment.requirements
+        ):
+            raise ValueError(
+                "The hackathon source needs a name, a verified timezone-aware deadline, "
+                "and explicit requirements."
             )
-            for requirement in requirements
+        requirement_models = [
+            Requirement(description=item.description, evidence=[item.evidence])
+            for item in enrichment.requirements
         ]
+        deadline_passed = enrichment.deadline_at <= now
         return Intention(
             id=str(uuid4()),
-            objective=f"Submit a valid project to {name}",
+            objective=f"Submit a valid project to {enrichment.title}",
             original_message=message,
+            status="blocked" if deadline_passed else "active",
             sources=[
                 Source(kind="url", value=context.source_url, observed_at=now),
                 Source(kind="repository", value=context.repository, observed_at=now),
             ],
-            deadline_at=deadline,
+            deadline_at=enrichment.deadline_at,
+            deadline_evidence=enrichment.deadline_evidence,
             requirements=requirement_models,
-            current_state="Remembered; project has not been checked yet.",
-            next_action=NextAction(
-                description="Inspect the project before the deadline",
-                mode="agent",
-                action_type="inspect_repository",
-                parameters={"repository": context.repository},
+            context_evidence=enrichment.context_evidence,
+            current_state=(
+                "Remembered; the verified deadline has passed."
+                if deadline_passed
+                else "Remembered; project has not been checked yet."
             ),
-            next_check_at=min(now + timedelta(hours=1), deadline),
+            next_action=(
+                None
+                if deadline_passed
+                else NextAction(
+                    description="Inspect the project before the deadline",
+                    mode="agent",
+                    action_type="inspect_repository",
+                    parameters={"repository": context.repository},
+                )
+            ),
+            next_check_at=(
+                None
+                if deadline_passed
+                else min(now + timedelta(hours=1), enrichment.deadline_at)
+            ),
             confidence=0.95,
             created_at=now,
             updated_at=now,
         )
 
-    @staticmethod
     def _remember_source(
+        self,
         message: str,
         context: MessageContext,
         source_text: str,
         now: datetime,
     ) -> Intention:
-        title_match = re.search(
-            r"<title[^>]*>(?P<title>.*?)</title>",
-            source_text,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        title = None
-        if title_match:
-            title = re.sub(r"\s+", " ", unescape(title_match.group("title"))).strip()
+        enrichment = self.enrich_source(context.source_url, source_text, now)
+        title = enrichment.title
         explicit_match = re.search(
             r"\b(?:don't let me forget to|remember to)\s+"
             r"(?P<action>apply|register|attend|participate|submit|read|buy)\b",
@@ -173,16 +194,36 @@ class DeterministicInterpreter:
             current_state = (
                 "Remembered with an uncertain intention; source details are unconfirmed."
             )
+        deadline_passed = bool(
+            enrichment.deadline_at
+            and enrichment.deadline_evidence
+            and enrichment.deadline_at <= now
+        )
+        if deadline_passed:
+            current_state += " The verified deadline has passed."
         return Intention(
             id=str(uuid4()),
             objective=objective,
             original_message=message,
+            status="blocked" if deadline_passed else "active",
             sources=[Source(kind="url", value=context.source_url, observed_at=now)],
-            deadline_at=None,
-            requirements=[],
+            deadline_at=enrichment.deadline_at,
+            deadline_evidence=enrichment.deadline_evidence,
+            requirements=[
+                Requirement(
+                    description=item.description,
+                    evidence=[item.evidence],
+                )
+                for item in enrichment.requirements
+            ],
+            context_evidence=enrichment.context_evidence,
             current_state=current_state,
             next_action=None,
-            next_check_at=None,
+            next_check_at=(
+                min(now + timedelta(hours=1), enrichment.deadline_at)
+                if enrichment.deadline_at and enrichment.deadline_at > now
+                else None
+            ),
             confidence=confidence,
             created_at=now,
             updated_at=now,
@@ -191,26 +232,18 @@ class DeterministicInterpreter:
     def check(
         self,
         intention: Intention,
-        source_text: str,
+        enrichment: SourceEnrichment,
         repository: RepositoryEvidence,
         now: datetime,
     ) -> CheckAssessment:
-        _, deadline, _ = self._parse_source(source_text)
+        if enrichment.deadline_at is None or not enrichment.deadline_evidence:
+            raise ValueError("The source no longer provides a verified timezone-aware deadline.")
         return CheckAssessment(
-            deadline_at=deadline,
-            deadline_near=timedelta(0) <= deadline - now <= timedelta(days=1),
+            deadline_at=enrichment.deadline_at,
+            deadline_near=(
+                timedelta(0)
+                <= enrichment.deadline_at - now
+                <= timedelta(days=1)
+            ),
             repository=repository,
-        )
-
-    @staticmethod
-    def _parse_source(source_text: str) -> tuple[str, datetime, list[str]]:
-        name_match = re.search(r"^Hackathon:\s*(.+)$", source_text, re.MULTILINE)
-        deadline_match = re.search(r"^Deadline:\s*(.+)$", source_text, re.MULTILINE)
-        requirements = re.findall(r"^-\s+(.+)$", source_text, re.MULTILINE)
-        if not name_match or not deadline_match or not requirements:
-            raise ValueError("The hackathon source is missing a name, deadline, or requirements.")
-        return (
-            name_match.group(1).strip(),
-            datetime.fromisoformat(deadline_match.group(1).strip()),
-            [item.strip() for item in requirements],
         )

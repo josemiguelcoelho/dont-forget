@@ -46,7 +46,7 @@ def build_flow(
     (repository / "uv.lock").write_text("version = 1\n", encoding="utf-8")
 
     store = SQLiteStore(tmp_path / "dont-forget.db")
-    actions = LocalActions([repository])
+    actions = LocalActions([repository], allowed_source_roots=[tmp_path])
     interpreter = DeterministicInterpreter()
     checker = IntentionChecker(store, interpreter, actions, clock)
     agent = DontForgetAgent(store, interpreter, actions, clock, checker)

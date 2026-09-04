@@ -3,18 +3,27 @@ from __future__ import annotations
 import re
 import tomllib
 from pathlib import Path
-from urllib.request import urlopen
 
 from .models import RepositoryEvidence
+from .sources import SourceFetcher, UrlSourceFetcher
 
 
 class LocalActions:
-    def __init__(self, allowed_workspaces: list[str | Path]) -> None:
+    def __init__(
+        self,
+        allowed_workspaces: list[str | Path],
+        source_fetcher: SourceFetcher | None = None,
+        allowed_source_roots: list[str | Path] | None = None,
+    ) -> None:
         self.allowed_workspaces = [Path(path).resolve() for path in allowed_workspaces]
+        self.source_fetcher = source_fetcher or UrlSourceFetcher(
+            allowed_file_roots=(
+                allowed_source_roots if allowed_source_roots is not None else []
+            )
+        )
 
     def read_source(self, source_url: str) -> str:
-        with urlopen(source_url, timeout=5) as response:  # noqa: S310 - explicit user source
-            return response.read().decode("utf-8")
+        return self.source_fetcher.fetch(source_url)
 
     def inspect_repository(self, repository: str | Path) -> RepositoryEvidence:
         path = self._allowed_path(repository)

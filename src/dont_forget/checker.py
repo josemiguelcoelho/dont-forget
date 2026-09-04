@@ -5,7 +5,7 @@ from typing import Callable
 
 from .actions import LocalActions
 from .llm import Interpreter
-from .models import Evidence, Intention, NextAction, RepositoryEvidence
+from .models import Evidence, Intention, NextAction, RepositoryEvidence, Requirement
 from .store import SQLiteStore
 
 
@@ -26,7 +26,11 @@ class IntentionChecker:
         now = self.clock()
         notices: list[str] = []
         for intention in self.store.list_due(now):
-            notice = self._check(intention, now)
+            try:
+                notice = self._check(intention, now)
+            except Exception as error:
+                self._record_check_failure(intention, now, error)
+                continue
             if notice:
                 notices.append(notice)
         return notices
@@ -40,12 +44,54 @@ class IntentionChecker:
     def _check(self, intention: Intention, now: datetime) -> str | None:
         source_url = next(source.value for source in intention.sources if source.kind == "url")
         repository_path = next(
-            source.value for source in intention.sources if source.kind == "repository"
+            (source.value for source in intention.sources if source.kind == "repository"),
+            None,
         )
         source_text = self.actions.read_source(source_url)
+        if repository_path is None:
+            return self._check_source_only(intention, source_url, source_text, now)
         repository = self.actions.inspect_repository(repository_path)
-        assessment = self.interpreter.check(intention, source_text, repository, now)
+        source_enrichment = self.interpreter.enrich_source(source_url, source_text, now)
+        if source_enrichment.deadline_at is None or not source_enrichment.deadline_evidence:
+            return self._block_repository_deadline(
+                intention,
+                source_url,
+                now,
+                deadline_at=None,
+                deadline_evidence=[],
+                state="The deadline can no longer be verified.",
+                notice="the deadline can no longer be verified.",
+            )
+        if source_enrichment.deadline_at <= now:
+            return self._block_repository_deadline(
+                intention,
+                source_url,
+                now,
+                deadline_at=source_enrichment.deadline_at,
+                deadline_evidence=source_enrichment.deadline_evidence,
+                state="The verified deadline has passed.",
+                notice="the verified deadline has passed.",
+            )
+        if not source_enrichment.requirements:
+            return self._block_repository_deadline(
+                intention,
+                source_url,
+                now,
+                deadline_at=source_enrichment.deadline_at,
+                deadline_evidence=source_enrichment.deadline_evidence,
+                state="The source requirements can no longer be verified.",
+                notice="the source requirements can no longer be verified.",
+            )
+        intention.context_evidence = source_enrichment.context_evidence
+        intention.requirements = [
+            Requirement(description=item.description, evidence=[item.evidence])
+            for item in source_enrichment.requirements
+        ]
+        assessment = self.interpreter.check(
+            intention, source_enrichment, repository, now
+        )
         intention.deadline_at = assessment.deadline_at
+        intention.deadline_evidence = source_enrichment.deadline_evidence
         missing_requirements = self._assess_requirements(
             intention, repository, assessment.deadline_near, now
         )
@@ -62,6 +108,7 @@ class IntentionChecker:
             "checked",
             {
                 "deadline_near": assessment.deadline_near,
+                "deadline_verified": bool(intention.deadline_evidence),
                 "repository_public": repository.is_public,
                 "demo_present": repository.has_demo,
                 "most_important_unresolved_requirement": (
@@ -102,7 +149,9 @@ class IntentionChecker:
         if missing_requirements:
             intention.status = "active"
             intention.resolved_at = None
-            intention.next_check_at = now + timedelta(hours=6)
+            intention.next_check_at = min(
+                now + timedelta(hours=6), assessment.deadline_at
+            )
             if notice is None and intention.most_important_unresolved_requirement:
                 notice = self._missing_notice(intention.most_important_unresolved_requirement)
         else:
@@ -110,6 +159,116 @@ class IntentionChecker:
             intention.resolved_at = now
             intention.next_check_at = None
             notice = "all set. your requirements are covered."
+        intention.updated_at = now
+        intention.version += 1
+        self.store.save_intention(intention)
+        return notice
+
+    def _record_check_failure(
+        self,
+        intention: Intention,
+        now: datetime,
+        error: Exception,
+    ) -> None:
+        self.store.append_event(
+            intention.id,
+            "check_failed",
+            {"error_type": type(error).__name__},
+            now,
+        )
+        if (
+            intention.deadline_at is not None
+            and intention.deadline_evidence
+            and intention.deadline_at > now
+        ):
+            intention.next_check_at = min(
+                now + timedelta(hours=1), intention.deadline_at
+            )
+            intention.current_state = "CHECK failed; source refresh will be retried."
+        else:
+            intention.status = "blocked"
+            intention.next_check_at = None
+            intention.current_state = "CHECK failed and no future verified deadline is available."
+        intention.updated_at = now
+        intention.version += 1
+        self.store.save_intention(intention)
+
+    def _block_repository_deadline(
+        self,
+        intention: Intention,
+        source_url: str,
+        now: datetime,
+        *,
+        deadline_at: datetime | None,
+        deadline_evidence: list[Evidence],
+        state: str,
+        notice: str,
+    ) -> str:
+        intention.deadline_at = deadline_at
+        intention.deadline_evidence = deadline_evidence
+        intention.status = "blocked"
+        intention.resolved_at = None
+        intention.current_state = state
+        intention.most_important_unresolved_requirement = None
+        intention.requirement_capability = None
+        intention.next_action = None
+        intention.next_check_at = None
+        self.store.append_event(
+            intention.id,
+            "checked",
+            {
+                "deadline_verified": bool(deadline_evidence),
+                "source": source_url,
+            },
+            now,
+        )
+        intention.updated_at = now
+        intention.version += 1
+        self.store.save_intention(intention)
+        return notice
+
+    def _check_source_only(
+        self,
+        intention: Intention,
+        source_url: str,
+        source_text: str,
+        now: datetime,
+    ) -> str | None:
+        enrichment = self.interpreter.enrich_source(source_url, source_text, now)
+        intention.deadline_at = enrichment.deadline_at
+        intention.deadline_evidence = enrichment.deadline_evidence
+        intention.context_evidence = enrichment.context_evidence
+        intention.requirements = [
+            Requirement(description=item.description, evidence=[item.evidence])
+            for item in enrichment.requirements
+        ]
+
+        notice = None
+        if intention.deadline_at is not None and intention.deadline_evidence:
+            if intention.deadline_at <= now:
+                intention.status = "blocked"
+                intention.next_check_at = None
+                intention.current_state = "The verified deadline has passed."
+                notice = "the verified deadline has passed."
+            else:
+                intention.status = "active"
+                intention.next_check_at = min(now + timedelta(hours=6), intention.deadline_at)
+                intention.current_state = "Source facts refreshed from verified evidence."
+                if intention.deadline_at - now <= timedelta(days=1):
+                    notice = f"deadline is coming up: {intention.deadline_at.isoformat()}."
+        else:
+            intention.next_check_at = None
+            intention.current_state = "Source checked; important details remain unknown."
+
+        self.store.append_event(
+            intention.id,
+            "checked",
+            {
+                "deadline_verified": bool(intention.deadline_evidence),
+                "source": source_url,
+            },
+            now,
+        )
         intention.updated_at = now
         intention.version += 1
         self.store.save_intention(intention)

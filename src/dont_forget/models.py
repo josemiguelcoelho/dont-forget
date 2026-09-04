@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class Evidence(BaseModel):
     claim: str
     source: str
+    excerpt: str | None = None
     observed_at: datetime
     confidence: float = Field(ge=0, le=1)
 
@@ -40,7 +41,9 @@ class Intention(BaseModel):
     status: Literal["active", "blocked", "completed", "abandoned"] = "active"
     sources: list[Source]
     deadline_at: datetime | None
+    deadline_evidence: list[Evidence] = Field(default_factory=list)
     requirements: list[Requirement]
+    context_evidence: list[Evidence] = Field(default_factory=list)
     current_state: str
     most_important_unresolved_requirement: str | None = None
     requirement_capability: Literal["agent_can_handle", "user_must_handle"] | None = None
