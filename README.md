@@ -4,7 +4,8 @@ A deliberately small local MVP that remembers an intention, checks it later, and
 
 ## What this milestone does
 
-- Accepts a natural message containing an HTTP(S) or `file://` source URL.
+- Accepts a natural `remember to ...` message, with an optional HTTP(S) or `file://` source URL and optional local project path.
+- Persists the user's stated objective even when no source is available; unsupported user work stays pending and is never reported as performed.
 - Preserves the source URL and original message in the stored intention.
 - Prefers an explicit action such as applying or registering; otherwise infers participation from clear event context.
 - Stores ambiguous sources as low-confidence follow-ups instead of inventing deadlines, requirements, or actions.
@@ -27,7 +28,8 @@ A deliberately small local MVP that remembers an intention, checks it later, and
 - Repairs README setup instructions only after explicit natural-language approval such as `handle what you can`.
 - Derives setup commands from `pyproject.toml` and `uv.lock`, preserving existing README content.
 - Records the completed action and exact changed path, immediately re-runs CHECK, and reports the next unresolved requirement.
-- Keeps repeated ACT requests idempotent and revalidates workspace authorization at execution time.
+- Keeps repeated and concurrent ACT requests idempotent through an atomic persisted claim, revalidates workspace authorization at execution time, and leaves a failed post-ACT CHECK retryable.
+- Carries one intention ID and snapshot through REMEMBER, persisted CHECK refreshes, approved ACT, immediate post-ACT CHECK, and later repeated operations.
 
 `DeterministicInterpreter` is a fixture-friendly replacement point for a future structured-output LLM. The core depends on its `Interpreter` protocol, not on a messaging channel or model provider.
 
@@ -62,15 +64,17 @@ Start the local natural-language channel, limiting file actions to the project w
 uv run dont-forget --workspace C:/path/to/project --source-root C:/path/to
 ```
 
-Then send:
+Then send a natural message such as:
 
 ```text
 don't let me forget this hackathon: file:///C:/path/to/hackathon.txt. my project is in C:/path/to/project
 ```
 
-The immediate reply is `got it`. The process checks due intentions in the background. The deterministic MVP schedules its first check one hour later.
+The same repository-aware flow also accepts wording such as `Remember to submit my project. Use file:///C:/path/to/hackathon.txt for the rules. My project is in C:/path/to/project`. A source is optional for plain intentions such as `Remember to call the dentist`; without verified evidence or an authorized capability, the objective remains explicitly pending and is not scheduled or executed.
 
-If the current requirement is an incomplete README setup, send `handle what you can`. The agent appends only missing setup instructions inside the configured workspace, immediately checks again, and reports the next unresolved requirement. Other responses do not approve a pending action.
+The immediate reply is `got it`. The process checks due intentions in the background. For repository-aware intentions with a verified future deadline, the deterministic MVP schedules its first check one hour later.
+
+If the current requirement is an incomplete README setup, send the standalone approval `handle what you can` (optionally prefixed with `please` or suffixed with `safely`). The agent appends only missing setup instructions inside the configured workspace, immediately checks again, and reports the next unresolved requirement. Embedded or negated uses of that phrase do not approve a pending action.
 
 ## Scope
 

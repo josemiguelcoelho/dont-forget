@@ -6,7 +6,7 @@ from typing import Callable
 from .actions import LocalActions
 from .llm import Interpreter
 from .models import Evidence, Intention, NextAction, RepositoryEvidence, Requirement
-from .store import SQLiteStore
+from .store import ConcurrentUpdateError, SQLiteStore
 
 
 class IntentionChecker:
@@ -28,8 +28,13 @@ class IntentionChecker:
         for intention in self.store.list_due(now):
             try:
                 notice = self._check(intention, now)
+            except ConcurrentUpdateError:
+                continue
             except Exception as error:
-                self._record_check_failure(intention, now, error)
+                try:
+                    self._record_check_failure(intention, now, error)
+                except ConcurrentUpdateError:
+                    pass
                 continue
             if notice:
                 notices.append(notice)
@@ -41,8 +46,30 @@ class IntentionChecker:
             raise ValueError(f"Unknown intention: {intention_id}")
         return self._check(intention, self.clock())
 
+    def check_now_safely(self, intention_id: str) -> tuple[bool, str | None]:
+        intention = self.store.get_intention(intention_id)
+        if intention is None:
+            raise ValueError(f"Unknown intention: {intention_id}")
+        now = self.clock()
+        try:
+            return True, self._check(intention, now)
+        except ConcurrentUpdateError:
+            return False, None
+        except Exception as error:
+            try:
+                self._record_check_failure(intention, now, error)
+            except ConcurrentUpdateError:
+                pass
+            return False, None
+
     def _check(self, intention: Intention, now: datetime) -> str | None:
-        source_url = next(source.value for source in intention.sources if source.kind == "url")
+        expected_version = intention.version
+        source_url = next(
+            (source.value for source in intention.sources if source.kind == "url"),
+            None,
+        )
+        if source_url is None:
+            return self._check_without_source(intention, now)
         repository_path = next(
             (source.value for source in intention.sources if source.kind == "repository"),
             None,
@@ -103,20 +130,15 @@ class IntentionChecker:
             intention.most_important_unresolved_requirement
         )
 
-        self.store.append_event(
-            intention.id,
-            "checked",
-            {
-                "deadline_near": assessment.deadline_near,
-                "deadline_verified": bool(intention.deadline_evidence),
-                "repository_public": repository.is_public,
-                "demo_present": repository.has_demo,
-                "most_important_unresolved_requirement": (
-                    intention.most_important_unresolved_requirement
-                ),
-            },
-            now,
-        )
+        checked_payload = {
+            "deadline_near": assessment.deadline_near,
+            "deadline_verified": bool(intention.deadline_evidence),
+            "repository_public": repository.is_public,
+            "demo_present": repository.has_demo,
+            "most_important_unresolved_requirement": (
+                intention.most_important_unresolved_requirement
+            ),
+        }
 
         notice: str | None = None
         if missing_requirements:
@@ -161,8 +183,32 @@ class IntentionChecker:
             notice = "all set. your requirements are covered."
         intention.updated_at = now
         intention.version += 1
-        self.store.save_intention(intention)
+        self.store.save_intention_with_event(
+            intention,
+            expected_version=expected_version,
+            event_type="checked",
+            event_payload=checked_payload,
+            event_created_at=now,
+        )
         return notice
+
+    def _check_without_source(self, intention: Intention, now: datetime) -> str:
+        expected_version = intention.version
+        intention.status = "active"
+        intention.current_state = (
+            "No source evidence is available; the user's objective remains pending."
+        )
+        intention.next_check_at = None
+        intention.updated_at = now
+        intention.version += 1
+        self.store.save_intention_with_event(
+            intention,
+            expected_version=expected_version,
+            event_type="checked",
+            event_payload={"source_available": False, "objective_pending": True},
+            event_created_at=now,
+        )
+        return f"one thing. {intention.objective.casefold()} is still pending."
 
     def _record_check_failure(
         self,
@@ -170,12 +216,7 @@ class IntentionChecker:
         now: datetime,
         error: Exception,
     ) -> None:
-        self.store.append_event(
-            intention.id,
-            "check_failed",
-            {"error_type": type(error).__name__},
-            now,
-        )
+        expected_version = intention.version
         if (
             intention.deadline_at is not None
             and intention.deadline_evidence
@@ -191,7 +232,13 @@ class IntentionChecker:
             intention.current_state = "CHECK failed and no future verified deadline is available."
         intention.updated_at = now
         intention.version += 1
-        self.store.save_intention(intention)
+        self.store.save_intention_with_event(
+            intention,
+            expected_version=expected_version,
+            event_type="check_failed",
+            event_payload={"error_type": type(error).__name__},
+            event_created_at=now,
+        )
 
     def _block_repository_deadline(
         self,
@@ -204,6 +251,7 @@ class IntentionChecker:
         state: str,
         notice: str,
     ) -> str:
+        expected_version = intention.version
         intention.deadline_at = deadline_at
         intention.deadline_evidence = deadline_evidence
         intention.status = "blocked"
@@ -213,18 +261,18 @@ class IntentionChecker:
         intention.requirement_capability = None
         intention.next_action = None
         intention.next_check_at = None
-        self.store.append_event(
-            intention.id,
-            "checked",
-            {
+        intention.updated_at = now
+        intention.version += 1
+        self.store.save_intention_with_event(
+            intention,
+            expected_version=expected_version,
+            event_type="checked",
+            event_payload={
                 "deadline_verified": bool(deadline_evidence),
                 "source": source_url,
             },
-            now,
+            event_created_at=now,
         )
-        intention.updated_at = now
-        intention.version += 1
-        self.store.save_intention(intention)
         return notice
 
     def _check_source_only(
@@ -234,6 +282,7 @@ class IntentionChecker:
         source_text: str,
         now: datetime,
     ) -> str | None:
+        expected_version = intention.version
         enrichment = self.interpreter.enrich_source(source_url, source_text, now)
         intention.deadline_at = enrichment.deadline_at
         intention.deadline_evidence = enrichment.deadline_evidence
@@ -260,18 +309,18 @@ class IntentionChecker:
             intention.next_check_at = None
             intention.current_state = "Source checked; important details remain unknown."
 
-        self.store.append_event(
-            intention.id,
-            "checked",
-            {
+        intention.updated_at = now
+        intention.version += 1
+        self.store.save_intention_with_event(
+            intention,
+            expected_version=expected_version,
+            event_type="checked",
+            event_payload={
                 "deadline_verified": bool(intention.deadline_evidence),
                 "source": source_url,
             },
-            now,
+            event_created_at=now,
         )
-        intention.updated_at = now
-        intention.version += 1
-        self.store.save_intention(intention)
         return notice
 
     def _assess_requirements(

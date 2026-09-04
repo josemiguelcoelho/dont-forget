@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -28,7 +30,7 @@ class LocalActions:
     def inspect_repository(self, repository: str | Path) -> RepositoryEvidence:
         path = self._allowed_path(repository)
         demo_names = {"DEMO.md", "demo.mp4", "demo.mov", "demo.webm"}
-        readme = path / "README.md"
+        readme = self._allowed_path(path / "README.md")
         readme_text = readme.read_text(encoding="utf-8") if readme.exists() else ""
         setup_commands = self._derive_setup_commands(path)
         return RepositoryEvidence(
@@ -60,7 +62,7 @@ class LocalActions:
 
     def repair_readme_setup(self, repository: str | Path) -> tuple[Path, bool]:
         repository_path = self._allowed_path(repository)
-        readme = repository_path / "README.md"
+        readme = self._allowed_path(repository_path / "README.md")
         contents = readme.read_text(encoding="utf-8") if readme.exists() else ""
         commands = self._derive_setup_commands(repository_path)
         if not commands:
@@ -80,8 +82,31 @@ class LocalActions:
             contents += "## Setup\n\n"
         commands_to_add = missing_commands if has_setup else commands
         contents += "```text\n" + "\n".join(commands_to_add) + "\n```\n"
-        readme.write_text(contents, encoding="utf-8")
+        self._atomic_write_text(readme, contents)
         return readme, True
+
+    @staticmethod
+    def _atomic_write_text(path: Path, contents: str) -> None:
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(contents)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+            os.replace(temporary_path, path)
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     def _derive_setup_commands(self, repository: Path) -> list[str]:
         if not (repository / "pyproject.toml").exists() or not (repository / "uv.lock").exists():

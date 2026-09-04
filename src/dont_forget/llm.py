@@ -52,7 +52,13 @@ class DeterministicInterpreter:
         self.source_extractor = source_extractor or DeterministicSourceExtractor()
 
     def is_action_approval(self, message: str) -> bool:
-        return bool(re.search(r"\bhandle what you can\b", message, flags=re.IGNORECASE))
+        return bool(
+            re.fullmatch(
+                r"\s*(?:please\s+)?handle what you can(?:\s+safely)?[.!]?\s*",
+                message,
+                flags=re.IGNORECASE,
+            )
+        )
 
     def enrich_source(
         self, source_url: str, source_text: str, now: datetime
@@ -71,15 +77,34 @@ class DeterministicInterpreter:
                 repository=str(Path(legacy_match.group("repository").strip()).resolve()),
             )
 
+        repository_match = re.search(
+            r"\b(?:my\s+)?(?:project|repository)\s+is\s+(?:in|at)\s+"
+            r"(?P<repository>.+?)\s*$",
+            message,
+            flags=re.IGNORECASE,
+        )
         match = re.search(r"(?:https?://|file://)\S+", message, flags=re.IGNORECASE)
         if not match:
-            raise ValueError("I need a message containing a URL.")
+            if self._explicit_objective(message) is None:
+                raise ValueError("I need a clear intention, such as 'remember to ...'.")
+            return MessageContext(
+                repository=(
+                    str(Path(repository_match.group("repository").strip()).resolve())
+                    if repository_match
+                    else None
+                )
+            )
         source_url = match.group(0).rstrip(".,;:!?)]}")
         parsed = urlsplit(source_url)
         if parsed.scheme in {"http", "https"} and not parsed.netloc:
             raise ValueError("I need a valid source URL.")
         return MessageContext(
             source_url=source_url,
+            repository=(
+                str(Path(repository_match.group("repository").strip()).resolve())
+                if repository_match
+                else None
+            ),
         )
 
     def remember(
@@ -89,6 +114,8 @@ class DeterministicInterpreter:
         source_text: str,
         now: datetime,
     ) -> Intention:
+        if context.source_url is None:
+            return self._remember_without_source(message, context, now)
         if context.repository is None:
             return self._remember_source(message, context, source_text, now)
 
@@ -110,7 +137,10 @@ class DeterministicInterpreter:
         deadline_passed = enrichment.deadline_at <= now
         return Intention(
             id=str(uuid4()),
-            objective=f"Submit a valid project to {enrichment.title}",
+            objective=(
+                self._explicit_objective(message)
+                or f"Submit a valid project to {enrichment.title}"
+            ),
             original_message=message,
             status="blocked" if deadline_passed else "active",
             sources=[
@@ -142,6 +172,57 @@ class DeterministicInterpreter:
                 else min(now + timedelta(hours=1), enrichment.deadline_at)
             ),
             confidence=0.95,
+            created_at=now,
+            updated_at=now,
+        )
+
+    @staticmethod
+    def _explicit_objective(message: str) -> str | None:
+        match = re.search(
+            r"\b(?:don't let me forget to|remember to)\s+"
+            r"(?P<objective>[^.!?\r\n]+)",
+            message,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        objective = match.group("objective").strip().rstrip(":;, ")
+        return objective[:1].upper() + objective[1:] if objective else None
+
+    def _remember_without_source(
+        self,
+        message: str,
+        context: MessageContext,
+        now: datetime,
+    ) -> Intention:
+        objective = self._explicit_objective(message)
+        if objective is None:
+            raise ValueError("I need a clear intention, such as 'remember to ...'.")
+        sources = (
+            [Source(kind="repository", value=context.repository, observed_at=now)]
+            if context.repository
+            else []
+        )
+        return Intention(
+            id=str(uuid4()),
+            objective=objective,
+            original_message=message,
+            status="active",
+            sources=sources,
+            deadline_at=None,
+            requirements=[],
+            current_state=(
+                "Remembered from the user's stated intention; no verified source facts "
+                "or supported agent action are available."
+            ),
+            next_action=NextAction(
+                description=objective,
+                mode="user",
+                action_type="user_follow_up",
+                status="pending",
+            ),
+            next_check_at=None,
+            confidence=0.9,
             created_at=now,
             updated_at=now,
         )

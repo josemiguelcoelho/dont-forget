@@ -29,40 +29,85 @@ class DontForgetAgent:
         if self.interpreter.is_action_approval(message):
             return self._act(now)
         context = self.interpreter.parse_message(message)
-        source_text = self.actions.read_source(context.source_url)
+        source_text = (
+            self.actions.read_source(context.source_url) if context.source_url else ""
+        )
         intention = self.interpreter.remember(message, context, source_text, now)
-        self.store.save_intention(intention)
-        self.store.append_event(
-            intention.id,
-            "created",
-            {"objective": intention.objective, "source": context.source_url},
-            now,
+        event_payload = {"objective": intention.objective}
+        if context.source_url:
+            event_payload["source"] = context.source_url
+        self.store.save_intention_with_event(
+            intention,
+            event_type="created",
+            event_payload=event_payload,
+            event_created_at=now,
         )
         return "got you." if context.repository is None else "got it"
 
     def _act(self, now: datetime) -> str:
-        for intention in self.store.list_intentions():
-            action = intention.next_action
-            if (
-                not action
-                or action.status != "proposed"
-                or action.mode != "agent"
-                or action.action_type != "repair_readme_setup"
-            ):
-                continue
-            readme, repaired = self.actions.repair_readme_setup(action.parameters["repository"])
-            action.status = "completed"
-            intention.updated_at = now
-            intention.version += 1
-            if repaired:
-                self.store.append_event(
-                    intention.id,
-                    "action_completed",
-                    {"action": "repair_readme_setup", "path": str(readme)},
-                    now,
+        awaiting_check = next(
+            (
+                intention
+                for intention in self.store.list_intentions()
+                if intention.next_action is not None
+                and intention.next_action.status == "completed"
+                and intention.next_action.post_check_pending
+            ),
+            None,
+        )
+        if awaiting_check is not None:
+            checked, _ = self.checker.check_now_safely(awaiting_check.id)
+            if not checked:
+                return "follow-up CHECK failed and will be retried."
+            updated = self.store.get_intention(awaiting_check.id)
+            if updated is None:
+                raise RuntimeError(
+                    f"Intention disappeared after CHECK: {awaiting_check.id}"
                 )
-            self.store.save_intention(intention)
-            self.checker.check_now(intention.id)
+            return self._remaining_user_work(
+                updated.most_important_unresolved_requirement
+            ).strip()
+
+        intention = self.store.claim_next_agent_action(
+            "repair_readme_setup", now
+        )
+        if intention is not None:
+            action = intention.next_action
+            if action is None or action.execution_id is None:
+                raise RuntimeError("Claimed action is missing execution state.")
+            try:
+                readme, repaired = self.actions.repair_readme_setup(
+                    action.parameters["repository"]
+                )
+            except Exception as error:
+                self.store.release_claimed_action(
+                    intention.id,
+                    action.execution_id,
+                    now,
+                    type(error).__name__,
+                )
+                raise
+            recovered = action.execution_attempts > 1
+            event_payload = {
+                "action": "repair_readme_setup",
+                "path": str(readme),
+            }
+            if not repaired:
+                event_payload["changed"] = False
+            if recovered:
+                event_payload["recovered"] = True
+            completed = self.store.complete_claimed_action(
+                intention.id,
+                action.execution_id,
+                now,
+                event_payload,
+            )
+            if completed is None:
+                raise RuntimeError("Action claim was lost before completion.")
+            checked, _ = self.checker.check_now_safely(intention.id)
+            if not checked:
+                prefix = "done. README setup is fixed. " if repaired else ""
+                return f"{prefix}follow-up CHECK failed and will be retried."
             updated = self.store.get_intention(intention.id)
             if updated is None:
                 raise RuntimeError(f"Intention disappeared after ACT: {intention.id}")
@@ -84,6 +129,18 @@ class DontForgetAgent:
         )
         if user_requirement:
             return self._remaining_user_work(user_requirement).strip()
+        user_action = next(
+            (
+                intention.next_action
+                for intention in self.store.list_intentions()
+                if intention.next_action is not None
+                and intention.next_action.mode == "user"
+                and intention.next_action.status in {"pending", "proposed"}
+            ),
+            None,
+        )
+        if user_action:
+            return f"you still need to {user_action.description.casefold()}."
         return "nothing else I can handle."
 
     @staticmethod

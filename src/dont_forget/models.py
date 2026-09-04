@@ -31,7 +31,11 @@ class NextAction(BaseModel):
     mode: Literal["user", "agent"]
     action_type: str
     parameters: dict[str, Any] = Field(default_factory=dict)
-    status: Literal["proposed", "completed", "failed"] = "proposed"
+    status: Literal["pending", "proposed", "executing", "completed", "failed"] = "proposed"
+    execution_id: str | None = None
+    execution_started_at: datetime | None = None
+    execution_attempts: int = Field(default=0, ge=0)
+    post_check_pending: bool = False
 
 
 class Intention(BaseModel):
@@ -57,7 +61,7 @@ class Intention(BaseModel):
 
 
 class MessageContext(BaseModel):
-    source_url: str
+    source_url: str | None = None
     repository: str | None = None
 
 

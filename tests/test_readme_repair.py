@@ -156,4 +156,55 @@ def test_approval_rejects_pending_repair_outside_workspace(tmp_path: Path) -> No
         agent.receive("handle what you can")
 
     assert not (outside / "README.md").exists()
+    failed = store.get_intention(pending.id)
+    assert failed is not None
+    assert failed.next_action is not None
+    assert failed.next_action.status == "proposed"
     assert store.count_events(pending.id, "action_completed") == 0
+
+
+def test_failed_atomic_replace_preserves_the_existing_readme(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "project"
+    store, agent, checker, clock = build_flow(tmp_path, repository)
+    readme = repository / "README.md"
+    original = "# Tiny Agents\n\nKeep this content.\n"
+    readme.write_text(original, encoding="utf-8")
+    clock.advance(hours=1)
+    checker.run_due()
+
+    def fail_replace(source: Path, destination: Path) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("dont_forget.actions.os.replace", fail_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        agent.receive("handle what you can")
+
+    intention = store.list_intentions()[0]
+    assert readme.read_text(encoding="utf-8") == original
+    assert intention.next_action is not None
+    assert intention.next_action.status == "proposed"
+    assert list(repository.glob(".README.md.*.tmp")) == []
+    assert store.count_events(intention.id, "action_completed") == 0
+
+
+def test_readme_symlink_cannot_escape_the_workspace(tmp_path: Path) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    (repository / "pyproject.toml").write_text(
+        '[project]\nname = "tiny-agents"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+    (repository / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("do not change\n", encoding="utf-8")
+    try:
+        (repository / "README.md").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation is not available on this host")
+
+    actions = LocalActions([repository])
+    with pytest.raises(PermissionError, match="outside the allowed workspaces"):
+        actions.repair_readme_setup(repository)
+
+    assert outside.read_text(encoding="utf-8") == "do not change\n"
