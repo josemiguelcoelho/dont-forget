@@ -185,6 +185,13 @@ class DeterministicInterpreter:
             flags=re.IGNORECASE,
         )
         if not match:
+            match = re.fullmatch(
+                r"\s*(?:please\s+)?(?:remind me to|i (?:need|have) to|make sure i)\s+"
+                r"(?P<objective>[^.!?\r\n]+)[.!]?\s*",
+                message,
+                flags=re.IGNORECASE,
+            )
+        if not match:
             return None
         objective = match.group("objective").strip().rstrip(":;, ")
         return objective[:1].upper() + objective[1:] if objective else None

@@ -110,7 +110,7 @@ def test_act_requires_explicit_approval_then_repairs_and_rechecks(tmp_path: Path
     assert updated.most_important_unresolved_requirement == "Demo video"
     assert updated.requirement_capability == "user_must_handle"
     assert updated.next_action is None
-    assert store.count_events(updated.id, "checked") == 2
+    assert store.count_events(updated.id, "checked") == 3
     assert store.count_events(updated.id, "action_completed") == 1
     assert store.list_event_payloads(updated.id, "action_completed") == [
         {"action": "repair_readme_setup", "path": str(readme)}
@@ -130,7 +130,7 @@ def test_repeated_act_is_idempotent(tmp_path: Path) -> None:
     assert agent.receive("handle what you can") == "you still need to record the demo."
     assert readme.read_text(encoding="utf-8") == contents
     assert store.count_events(intention.id, "action_completed") == 1
-    assert store.count_events(intention.id, "checked") == 2
+    assert store.count_events(intention.id, "checked") == 3
 
 
 def test_negated_approval_does_not_execute_an_action(tmp_path: Path) -> None:
@@ -170,7 +170,7 @@ def test_concurrent_approval_claims_the_action_once(tmp_path: Path) -> None:
     assert any(reply.startswith("done. README setup is fixed.") for reply in replies)
     assert (repository / "README.md").exists()
     assert store.count_events(intention.id, "action_completed") == 1
-    assert store.count_events(intention.id, "checked") == 2
+    assert store.count_events(intention.id, "checked") == 3
 
 
 def test_post_action_check_failure_is_durable_and_retryable(tmp_path: Path) -> None:
@@ -179,13 +179,19 @@ def test_post_action_check_failure_is_durable_and_retryable(tmp_path: Path) -> N
     )
     checker.run_due()
     original_read_source = agent.actions.read_source
+    refresh_count = 0
 
     def fail_source_refresh(source_url: str) -> str:
+        nonlocal refresh_count
+        refresh_count += 1
+        if refresh_count == 1:
+            return original_read_source(source_url)
         raise OSError("source unavailable")
 
     agent.actions.read_source = fail_source_refresh  # type: ignore[method-assign]
     assert agent.receive("handle what you can") == (
-        "done. README setup is fixed. follow-up CHECK failed and will be retried."
+        "done. README setup is fixed, but I couldn't refresh things afterward. "
+        "I'll try again."
     )
 
     interrupted = store.list_intentions()[0]
@@ -204,7 +210,7 @@ def test_post_action_check_failure_is_durable_and_retryable(tmp_path: Path) -> N
     assert recovered.most_important_unresolved_requirement == "Demo video"
     assert store.count_events(recovered.id, "action_completed") == 1
     assert store.count_events(recovered.id, "check_failed") == 1
-    assert store.count_events(recovered.id, "checked") == 2
+    assert store.count_events(recovered.id, "checked") == 3
 
 
 def test_stale_claim_recovery_records_the_completed_mutation(tmp_path: Path) -> None:

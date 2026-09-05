@@ -107,7 +107,7 @@ def test_natural_intention_completes_a_persistent_closed_loop(tmp_path: Path) ->
     assert acted.requirement_capability == "user_must_handle"
     assert acted.next_action is None
     assert store.count_events(intention_id, "created") == 1
-    assert store.count_events(intention_id, "checked") == 2
+    assert store.count_events(intention_id, "checked") == 3
     assert store.count_events(intention_id, "action_completed") == 1
 
     readme = repository / "README.md"
@@ -119,7 +119,7 @@ def test_natural_intention_completes_a_persistent_closed_loop(tmp_path: Path) ->
         "you still need to record the demo."
     )
     assert readme.read_text(encoding="utf-8") == contents
-    assert store.count_events(intention_id, "checked") == 2
+    assert store.count_events(intention_id, "checked") == 3
     assert store.count_events(intention_id, "action_completed") == 1
 
 

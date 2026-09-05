@@ -4,7 +4,7 @@ A deliberately small local MVP that remembers an intention, checks it later, and
 
 ## What this milestone does
 
-- Accepts a natural `remember to ...` message, with an optional HTTP(S) or `file://` source URL and optional local project path.
+- Accepts everyday wording such as `I need to ...`, `remind me to ...`, or a URL followed by `don't let me forget this`, with an optional local project path.
 - Persists the user's stated objective even when no source is available; unsupported user work stays pending and is never reported as performed.
 - Preserves the source URL and original message in the stored intention.
 - Prefers an explicit action such as applying or registering; otherwise infers participation from clear event context.
@@ -26,6 +26,10 @@ A deliberately small local MVP that remembers an intention, checks it later, and
 - Leaves user-only requirements, such as recording a demo or publishing a repository, to the user.
 - Creates a bounded pending action for an agent-capable README setup requirement without changing files during CHECK.
 - Repairs README setup instructions only after explicit natural-language approval such as `handle what you can`.
+- Understands natural status questions such as `am I forgetting anything?` and refreshes evidence before answering.
+- Resolves references such as `what about Tiny Agents?` only when they identify one existing item; otherwise it asks rather than guesses.
+- Lets a later `my project is in ...` message add repository context when there is exactly one eligible open item.
+- Supports scoped approval such as `handle what you can for Tiny Agents` and broad approval across all currently proposed, supported actions.
 - Derives setup commands from `pyproject.toml` and `uv.lock`, preserving existing README content.
 - Records the completed action and exact changed path, immediately re-runs CHECK, and reports the next unresolved requirement.
 - Keeps repeated and concurrent ACT requests idempotent through an atomic persisted claim, revalidates workspace authorization at execution time, and leaves a failed post-ACT CHECK retryable.
@@ -64,7 +68,7 @@ Start the local natural-language channel, limiting file actions to the project w
 uv run dont-forget --workspace C:/path/to/project --source-root C:/path/to
 ```
 
-Then send a natural message such as:
+Then text it naturally, for example:
 
 ```text
 don't let me forget this hackathon: file:///C:/path/to/hackathon.txt. my project is in C:/path/to/project
@@ -73,6 +77,8 @@ don't let me forget this hackathon: file:///C:/path/to/hackathon.txt. my project
 The same repository-aware flow also accepts wording such as `Remember to submit my project. Use file:///C:/path/to/hackathon.txt for the rules. My project is in C:/path/to/project`. A source is optional for plain intentions such as `Remember to call the dentist`; without verified evidence or an authorized capability, the objective remains explicitly pending and is not scheduled or executed.
 
 The immediate reply is `got it`. The process checks due intentions in the background. For repository-aware intentions with a verified future deadline, the deterministic MVP schedules its first check one hour later.
+
+You can ask `am I forgetting anything?`, `what did I forget?`, or `what about Tiny Agents?`. These questions refresh the selected source and repository evidence before producing a short answer. If a reference is missing or matches more than one item, the agent asks which one instead of choosing silently.
 
 If the current requirement is an incomplete README setup, send the standalone approval `handle what you can` (optionally prefixed with `please` or suffixed with `safely`). The agent appends only missing setup instructions inside the configured workspace, immediately checks again, and reports the next unresolved requirement. Embedded or negated uses of that phrase do not approve a pending action.
 

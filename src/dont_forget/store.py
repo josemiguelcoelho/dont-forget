@@ -120,6 +120,7 @@ class SQLiteStore:
         action_type: str,
         now: datetime,
         *,
+        intention_id: str | None = None,
         stale_after: timedelta = timedelta(minutes=5),
     ) -> Intention | None:
         with self._lock:
@@ -130,6 +131,8 @@ class SQLiteStore:
                 ).fetchall()
                 for row in rows:
                     intention = Intention.model_validate_json(row["snapshot"])
+                    if intention_id is not None and intention.id != intention_id:
+                        continue
                     action = intention.next_action
                     stale_execution = bool(
                         action
